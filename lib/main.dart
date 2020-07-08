@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:web_socket_channel/io.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+import './routes/index.dart';
 
 void main() {
   runApp(MyApp());
@@ -11,17 +14,26 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: '卿听',
       themeMode: ThemeMode.dark,
+      initialRoute: '/',
+      routes: <String, WidgetBuilder>{
+        "/": (context) => MyHomePage(
+              channel: IOWebSocketChannel.connect('ws://echo.websocket.org'),
+            ),
+        "Index": (context) =>
+            Index(roomId: ModalRoute.of(context).settings.arguments),
+      },
       theme: ThemeData(
         brightness: Brightness.dark,
         visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
-      home: MyHomePage(),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key}) : super(key: key);
+  final WebSocketChannel channel;
+  final FocusNode blankNode = FocusNode();
+  MyHomePage({Key key, @required this.channel}) : super(key: key);
 
   @override
   _MyHomePageState createState() => _MyHomePageState();
@@ -29,38 +41,60 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   @override
+  void initState() {
+    Future.delayed(Duration.zero, () {
+      widget.channel.stream.listen((message) {
+        print('message$message');
+        Navigator.of(context).pushReplacementNamed("Index", arguments: message);
+      }, onError: (error) {
+        print('error');
+        final snackBar = SnackBar(
+          content: Text('网络出了点问题，请稍后再试$error'),
+          behavior: SnackBarBehavior.floating,
+        );
+        Scaffold.of(context).showSnackBar(snackBar);
+      });
+    });
+    super.initState();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: <Widget>[
-            Container(
-              child: Column(
-                children: <Widget>[
-                  Text(
-                    '卿听',
-                    style: TextStyle(
-                      fontSize: 80,
+    return GestureDetector(
+      onTap: () {
+        FocusScope.of(context).requestFocus(widget.blankNode);
+      },
+      child: Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: <Widget>[
+              Container(
+                child: Column(
+                  children: <Widget>[
+                    Text(
+                      '卿听',
+                      style: TextStyle(
+                        fontSize: 80,
+                      ),
                     ),
-                  ),
-                  Text(
-                    '--独乐乐不如众乐乐',
-                    style: TextStyle(
-                      fontStyle: FontStyle.italic,
+                    Text(
+                      '--独乐乐不如众乐乐',
+                      style: TextStyle(
+                        fontStyle: FontStyle.italic,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            Container(
-              height: 120,
-              width: 160,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: <Widget>[
-                  InkWell(
-                    child: Container(
+              Container(
+                height: 120,
+                width: 160,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: <Widget>[
+                    InkWell(
+                      child: Container(
                         // width: 120,
                         height: 50,
                         decoration: BoxDecoration(
@@ -82,35 +116,48 @@ class _MyHomePageState extends State<MyHomePage> {
                               '创建房间',
                               textAlign: TextAlign.center,
                               style: TextStyle(
-                                fontSize: 16,
+                                fontSize: 18,
                               ),
                             )
                           ],
                         ),
                       ),
-                    onTap: () {},
-                  ),
-                  SearchInput(),
-                ],
+                      onTap: () {},
+                    ),
+                    SearchInput(channel: widget.channel),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
+
+  @override
+  void dispose() {
+    print('dispose');
+    widget.channel.sink.close();
+    super.dispose();
+  }
 }
 
 class SearchInput extends StatefulWidget {
+  final WebSocketChannel channel;
+  SearchInput({Key key, @required this.channel}) : super(key: key);
+
   _SearchInputState createState() => new _SearchInputState();
 }
 
 class _SearchInputState extends State<SearchInput>
     with SingleTickerProviderStateMixin {
   bool isExpand = false;
+  String roomId = '';
   bool isTyping = false;
   AnimationController _controller;
   Animation<double> animation;
+  TextEditingController _textController = new TextEditingController();
 
   initState() {
     super.initState();
@@ -122,16 +169,6 @@ class _SearchInputState extends State<SearchInput>
       });
   }
 
-  Future<void> startAnimation() async {
-    // 调用 AnimationController 的 forward 方法启动动画
-    await _controller.forward();
-  }
-
-  Future<void> reverseAnimation() async {
-    // 调用 AnimationController 的 forward 方法启动动画
-    await _controller.reverse();
-  }
-
   // AnimateInput animateInput = new AnimateInput();
   Widget build(BuildContext context) {
     return Container(
@@ -139,7 +176,8 @@ class _SearchInputState extends State<SearchInput>
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            AnimatedInput(animation: animation),
+            AnimatedInput(
+                animation: animation, textController: _textController),
             Container(
               width: 50,
               height: 50,
@@ -174,11 +212,16 @@ class _SearchInputState extends State<SearchInput>
       _controller.forward();
       return;
     }
-    setState(() {
-      isExpand = false;
-    });
-    FocusScope.of(context).unfocus();
-    _controller.reverse();
+    if (_textController.text.isNotEmpty) {
+      print(_textController.text);
+      widget.channel.sink.add(_textController.text);
+    } else {
+      setState(() {
+        isExpand = false;
+      });
+      FocusScope.of(context).unfocus();
+      _controller.reverse();
+    }
   }
 
   dispose() {
@@ -188,33 +231,41 @@ class _SearchInputState extends State<SearchInput>
 }
 
 class AnimatedInput extends AnimatedWidget {
-  AnimatedInput({Key key, Animation<double> animation})
+  AnimatedInput({Key key, Animation<double> animation, this.textController})
       : super(key: key, listenable: animation);
   static final _sizeTween = Tween<double>(begin: 0, end: 110);
+  final TextEditingController textController;
   Widget build(BuildContext context) {
     final animation = listenable as Animation<double>;
     return Container(
       width: _sizeTween.evaluate(animation),
       child: Container(
+        height: 50,
         decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.only(
                 topLeft: Radius.circular(3), bottomLeft: Radius.circular(3))),
         child: TextField(
+          controller: textController,
           decoration: InputDecoration(
-            hintText: "请输入房间号",
-            hintStyle: TextStyle(color: Colors.grey),
+            // isDense: true,
+            hintText: "房间号",
+            hintStyle: TextStyle(color: Colors.grey, fontSize: 18, height: 1),
             focusColor: Colors.blue,
-            contentPadding: const EdgeInsets.symmetric(vertical: 12),
+            // contentPadding: EdgeInsets.zero,
             border: InputBorder.none,
-            // borderRadius: BorderRadius.only(topLeft: Radius.circular(3),bottomLeft: Radius.circular(3))
+            // contentPadding: EdgeInsets.symmetric(
+            //   vertical: 12.5,
+            // )
+            // contentPadding: EdgeInsets.symmetric(vertical: 10),
           ),
           style: TextStyle(
-            fontSize: 16,
-            color: Color(0xB22196F3),
+            textBaseline: TextBaseline.alphabetic,
+            fontSize: 18,
+            color: Colors.blue[500],
           ),
           textAlign: TextAlign.center,
-          textAlignVertical: TextAlignVertical.center,
+          textAlignVertical: TextAlignVertical.top,
         ),
       ),
     );
